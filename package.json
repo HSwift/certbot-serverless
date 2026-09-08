@@ -1,0 +1,22 @@
+{
+  "name": "certbot-serverless",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare-native certificate management for Let's Encrypt and Origin CA",
+  "type": "module",
+  "packageManager": "pnpm@11.26.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --parallel --filter @certbot/api --filter @certbot/web dev",
+    "dev:api": "pnpm --filter @certbot/api dev",
+    "dev:web": "pnpm --filter @certbot/web dev",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "cf:typegen": "pnpm --filter @certbot/api cf:typegen",
+    "secrets:local": "node scripts/init-local-secrets.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.129.0"
+  }
+}

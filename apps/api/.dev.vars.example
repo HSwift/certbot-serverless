@@ -1,0 +1,8 @@
+# Copy to .dev.vars. Never commit the real values.
+CLOUDFLARE_API_TOKEN="Cloudflare API token with Zone DNS Edit/Read and SSL Certificates Edit"
+API_BEARER_TOKEN="generate-a-long-random-token"
+DOWNLOAD_SIGNING_KEY="base64-encoded-32-byte-key"
+CERTIFICATE_MASTER_KEY="base64-encoded-32-byte-key"
+ACME_ACCOUNT_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+ACME_DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+DOWNLOAD_URL_BASE="http://localhost:8788"

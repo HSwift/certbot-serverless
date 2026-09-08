@@ -1,0 +1,55 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "certbot-serverless-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "ACME_DIRECTORY_URL": "https://acme-v02.api.letsencrypt.org/directory",
+    "DOWNLOAD_URL_BASE": "https://api.example.com",
+    "ACCESS_TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
+    "ACCESS_AUD": "replace-with-access-application-aud"
+  },
+  "secrets": {
+    "required": [
+      "CLOUDFLARE_API_TOKEN",
+      "API_BEARER_TOKEN",
+      "DOWNLOAD_SIGNING_KEY",
+      "CERTIFICATE_MASTER_KEY",
+      "ACME_ACCOUNT_KEY"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "certbot-serverless",
+      "database_id": "replace-with-d1-database-id",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "CERTIFICATES",
+      "bucket_name": "certbot-serverless-certificates"
+    }
+  ],
+  "workflows": [
+    {
+      "binding": "CERTIFICATE_WORKFLOW",
+      "name": "certbot-serverless-issuance",
+      "class_name": "CertificateWorkflow"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 2 * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
+  }
+}
