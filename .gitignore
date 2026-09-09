@@ -11,6 +11,8 @@ coverage/
 .env.*
 !.env.example
 *.local
+apps/api/wrangler.generated.jsonc
+apps/api/.deploy-secrets.generated.json
 *.pem
 *.key
 *.crt

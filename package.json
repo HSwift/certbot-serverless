@@ -14,6 +14,8 @@
     "test": "pnpm -r test",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "cf:typegen": "pnpm --filter @certbot/api cf:typegen",
+    "cf:render": "node scripts/render-cloudflare-config.mjs",
+    "cf:deploy": "node scripts/deploy-cloudflare.mjs",
     "secrets:local": "node scripts/init-local-secrets.mjs"
   },
   "devDependencies": {

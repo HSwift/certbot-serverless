@@ -74,9 +74,18 @@ pnpm dev
 
 Vite 代理只在本地读取 `apps/web/.env.local`，并为 `/api` 请求附加 Bearer Token；该值不会进入前端产物。
 
-## Cloudflare 资源
+## Cloudflare 托管的 Git 部署
 
-先登录，并创建 D1 与 R2：
+本项目不需要 GitHub Actions。Cloudflare 直接从同一个 GitHub 仓库构建两个项目：
+
+1. `certbot-serverless-api`：Workers Builds 负责 API、Workflow、Cron 和 D1 migration。
+2. `certbot-serverless-console`：Pages Git Integration 负责前端与 `/api` Pages Function。
+
+生产配置由 Workers Builds 的变量和 Secret 注入临时文件；临时文件只存在于构建容器，不会写回 Git，也不会输出值到构建日志。
+
+### 1. 一次性创建 D1 和 R2
+
+可以在 Dashboard 创建，也可以在本地使用 Wrangler：
 
 ```bash
 pnpm exec wrangler login
@@ -84,59 +93,118 @@ pnpm exec wrangler d1 create certbot-serverless --location apac
 pnpm exec wrangler r2 bucket create certbot-serverless-certificates --location apac
 ```
 
-将 D1 命令返回的 `database_id` 写入 [apps/api/wrangler.jsonc](apps/api/wrangler.jsonc)，并修改：
+保存 D1 返回的 Database ID。它只需要填入 Cloudflare 的 Build Variable，不需要修改或提交仓库中的 `wrangler.jsonc`。
 
-- `DOWNLOAD_URL_BASE`：Worker 的公开自定义域名，例如 `https://cert-api.example.com`。
-- `ACCESS_TEAM_DOMAIN`：例如 `https://your-team.cloudflareaccess.com`。
-- `ACCESS_AUD`：Pages Access Application 的 Audience Tag。
+### 2. 创建 API Worker Build
 
-生产环境 Cloudflare API Token 至少需要：
+在 Workers & Pages 中创建或选择名为 `certbot-serverless-api` 的 Worker，然后连接 GitHub 仓库。Worker 名称必须与 `apps/api/wrangler.jsonc` 中的 `name` 一致。
+
+构建设置：
+
+| Setting | Value |
+| --- | --- |
+| Production branch | `main` |
+| Root directory | 留空，使用仓库根目录 |
+| Build command | `pnpm cf:render && pnpm --filter @certbot/api typecheck` |
+| Deploy command | `pnpm cf:deploy` |
+
+构建环境版本：
+
+| Build variable | Value |
+| --- | --- |
+| `NODE_VERSION` | `22` |
+| `PNPM_VERSION` | `11.26.0` |
+
+`pnpm cf:render` 读取模板并生成：
+
+- `apps/api/wrangler.generated.jsonc`
+- `apps/api/.deploy-secrets.generated.json`
+
+`pnpm cf:deploy` 先应用远程 D1 migration，再通过生成配置部署 Worker，最后删除两个临时文件。
+
+### 3. 配置 API Build Variables
+
+在 Worker 的 **Settings → Builds → Variables and secrets** 中添加以下非敏感 Build Variables：
+
+| Build variable | Value |
+| --- | --- |
+| `D1_DATABASE_ID` | 第一步创建的 D1 Database ID |
+| `DOWNLOAD_URL_BASE` | Worker 的公开 HTTPS 地址，例如 `https://cert-api.example.com` |
+| `ACCESS_TEAM_DOMAIN` | Access Team Domain，例如 `https://your-team.cloudflareaccess.com` |
+| `ACCESS_AUD` | Console Access Application 的 Audience Tag |
+
+这些值仅用于渲染部署配置。`apps/api/wrangler.jsonc` 保持通用占位符，不保存账户相关内容。
+
+### 4. 配置 API Build Secrets
+
+仍在 **Settings → Builds → Variables and secrets** 中添加以下 Build Secrets。名称使用 `RUNTIME_` 前缀，避免覆盖 Workers Builds 自己用于部署的 `CLOUDFLARE_API_TOKEN`：
+
+| Build secret | 部署后的 Worker Secret | 用途 |
+| --- | --- | --- |
+| `RUNTIME_CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_TOKEN` | DNS-01 和 Origin CA API |
+| `RUNTIME_API_BEARER_TOKEN` | `API_BEARER_TOKEN` | 自动化 API 鉴权 |
+| `RUNTIME_DOWNLOAD_SIGNING_KEY` | `DOWNLOAD_SIGNING_KEY` | HMAC 预签名下载，32-byte base64 |
+| `RUNTIME_CERTIFICATE_MASTER_KEY` | `CERTIFICATE_MASTER_KEY` | R2 内容加密，32-byte base64 |
+| `RUNTIME_ACME_ACCOUNT_KEY` | `ACME_ACCOUNT_KEY` | ACME 账户 PKCS#8 PEM 私钥 |
+
+`RUNTIME_ACME_ACCOUNT_KEY` 应以完整多行 PEM 形式填写。其余材料可以这样生成：
+
+```bash
+openssl rand -base64 32 # API_BEARER_TOKEN
+openssl rand -base64 32 # DOWNLOAD_SIGNING_KEY
+openssl rand -base64 32 # CERTIFICATE_MASTER_KEY
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out acme-account.pem
+```
+
+生产环境的运行时 Cloudflare API Token 至少需要：
 
 - Zone / Zone / Read
 - Zone / DNS / Edit
 - Zone / SSL and Certificates / Edit
 
-建议只允许需要签发证书的 Zone。所有敏感值都使用 Workers secrets，不要写入 `wrangler.jsonc`。
+建议把该 Token 限制到需要签发证书的 Zone。
 
-创建或准备以下五个 secret：
+Deploy command 会执行 D1 migration。Workers Builds 的部署 API Token 因此必须包含：
 
-| Secret | 用途 |
+- Account / Workers Scripts / Edit
+- Account / D1 / Edit
+- Account / Workers R2 Storage / Edit
+- Account / Account Settings / Read
+- 使用自定义域名或 Route 时：Zone / Workers Routes / Edit
+
+在 **Settings → Builds → API token** 中选择具备这些权限的自定义 Token。这个部署 Token 与 `RUNTIME_CLOUDFLARE_API_TOKEN` 是两个不同用途的 Token。
+
+### 5. 创建 Pages Git 项目
+
+从同一个 GitHub 仓库创建名为 `certbot-serverless-console` 的 Pages 项目：
+
+| Setting | Value |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | DNS-01 和 Origin CA API |
-| `API_BEARER_TOKEN` | 自动化 API 鉴权 |
-| `DOWNLOAD_SIGNING_KEY` | HMAC 预签名下载，32-byte base64 |
-| `CERTIFICATE_MASTER_KEY` | R2 内容加密，32-byte base64 |
-| `ACME_ACCOUNT_KEY` | Let's Encrypt ACME 账户 PKCS#8 PEM 私钥 |
+| Production branch | `main` |
+| Root directory | `apps/web` |
+| Build command | `pnpm build` |
+| Build output directory | `dist` |
 
-可用以下命令生成材料，再通过交互式 `wrangler secret put` 输入，避免 secret 出现在 shell 参数中：
+Pages Build Variables：
 
-```bash
-openssl rand -base64 32
-openssl rand -base64 32
-openssl rand -base64 32
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out acme-account.pem
+| Variable | Value |
+| --- | --- |
+| `NODE_VERSION` | `22` |
+| `PNPM_VERSION` | `11.26.0` |
 
-pnpm --filter @certbot/api exec wrangler secret put CLOUDFLARE_API_TOKEN
-pnpm --filter @certbot/api exec wrangler secret put API_BEARER_TOKEN
-pnpm --filter @certbot/api exec wrangler secret put DOWNLOAD_SIGNING_KEY
-pnpm --filter @certbot/api exec wrangler secret put CERTIFICATE_MASTER_KEY
-pnpm --filter @certbot/api exec wrangler secret put ACME_ACCOUNT_KEY
-```
+Pages 的生产配置由仓库中的 `apps/web/wrangler.jsonc` 管理，其中已经声明：
 
-对远程 D1 执行 migration，然后部署 Worker：
+- Pages 项目名 `certbot-serverless-console`
+- 构建输出目录 `./dist`
+- `API` Service Binding 指向 `certbot-serverless-api`
 
-```bash
-pnpm exec wrangler d1 migrations apply certbot-serverless --remote -c apps/api/wrangler.jsonc
-pnpm --filter @certbot/api deploy
-```
+不需要在 Dashboard 重复添加 Service Binding。先成功部署 API Worker，再部署 Pages；Cloudflare Git Build 只有在该 JSONC 文件已经提交并推送后才能读取它。
 
-首次部署 Pages 时创建名为 `certbot-serverless-console` 的 Pages 项目；随后：
+### 6. 后续部署
 
-```bash
-pnpm --filter @certbot/web deploy
-```
+完成以上一次性设置后，每次 push 到 `main` 都由 Cloudflare 自动构建和部署，不需要本地登录、生成生产配置或运行部署命令。
 
-Pages 配置中的 `API` Service Binding 指向 `certbot-serverless-api`。如果通过 Dashboard 管理绑定，变量名也必须是 `API`，修改后重新部署 Pages。
+Pull Request 和其他分支建议只启用 Pages Preview；API 的非生产分支构建应关闭，除非另外准备隔离的 D1、R2 和 Worker 环境。
 
 ## Zero Trust 配置
 
