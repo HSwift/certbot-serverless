@@ -81,7 +81,7 @@ Vite 代理只在本地读取 `apps/web/.env.local`，并为 `/api` 请求附加
 1. `certbot-serverless-api`：Workers Builds 负责 API、Workflow、Cron 和 D1 migration。
 2. `certbot-serverless-console`：Pages Git Integration 负责前端与 `/api` Pages Function。
 
-生产配置由 Workers Builds 的变量和 Secret 注入临时文件；临时文件只存在于构建容器，不会写回 Git，也不会输出值到构建日志。
+非敏感生产配置由 Workers Builds 的变量注入临时文件；运行时 Secret 在首次初始化时写入 Worker，后续部署会保留。临时文件只存在于构建容器，不会写回 Git，也不会输出值到构建日志。
 
 ### 1. 一次性创建 D1 和 R2
 
@@ -118,9 +118,8 @@ pnpm exec wrangler r2 bucket create certbot-serverless-certificates --location a
 `pnpm cf:render` 读取模板并生成：
 
 - `apps/api/wrangler.generated.jsonc`
-- `apps/api/.deploy-secrets.generated.json`
 
-`pnpm cf:deploy` 先应用远程 D1 migration，再通过生成配置部署 Worker，最后删除两个临时文件。
+`pnpm cf:deploy` 先应用远程 D1 migration，再通过生成配置部署 Worker，最后删除临时文件。首次初始化可以额外生成一次性 Secret 文件；常规 Git Build 不会生成或上传 Secret 文件。
 
 ### 3. 配置 API Build Variables
 
@@ -135,19 +134,21 @@ pnpm exec wrangler r2 bucket create certbot-serverless-certificates --location a
 
 这些值仅用于渲染部署配置。`apps/api/wrangler.jsonc` 保持通用占位符，不保存账户相关内容。
 
-### 4. 配置 API Build Secrets
+### 4. 一次性初始化 API Runtime Secrets
 
-仍在 **Settings → Builds → Variables and secrets** 中添加以下 Build Secrets。名称使用 `RUNTIME_` 前缀，避免覆盖 Workers Builds 自己用于部署的 `CLOUDFLARE_API_TOKEN`：
+首次部署前，通过 Wrangler 或 Worker 的 **Settings → Variables and Secrets** 配置以下 Runtime Secrets：
 
-| Build secret | 部署后的 Worker Secret | 用途 |
-| --- | --- | --- |
-| `RUNTIME_CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_TOKEN` | DNS-01 和 Origin CA API |
-| `RUNTIME_API_BEARER_TOKEN` | `API_BEARER_TOKEN` | 自动化 API 鉴权 |
-| `RUNTIME_DOWNLOAD_SIGNING_KEY` | `DOWNLOAD_SIGNING_KEY` | HMAC 预签名下载，32-byte base64 |
-| `RUNTIME_CERTIFICATE_MASTER_KEY` | `CERTIFICATE_MASTER_KEY` | R2 内容加密，32-byte base64 |
-| `RUNTIME_ACME_ACCOUNT_KEY` | `ACME_ACCOUNT_KEY` | ACME 账户 PKCS#8 PEM 私钥 |
+| Worker Secret | 用途 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | DNS-01 和 Origin CA API |
+| `API_BEARER_TOKEN` | 自动化 API 鉴权 |
+| `DOWNLOAD_SIGNING_KEY` | HMAC 预签名下载，32-byte base64 |
+| `CERTIFICATE_MASTER_KEY` | R2 内容加密，32-byte base64 |
+| `ACME_ACCOUNT_KEY` | ACME 账户 PKCS#8 PEM 私钥 |
 
-`RUNTIME_ACME_ACCOUNT_KEY` 应以完整多行 PEM 形式填写。其余材料可以这样生成：
+初始化完成后不需要把这些值复制到 Workers Builds。普通 `wrangler deploy` 会保留现有 Secret，配置中的 `secrets.required` 会在缺失时阻止部署。需要轮换时再使用 `wrangler secret put` 或 Dashboard 更新。
+
+`ACME_ACCOUNT_KEY` 应是完整的多行 PEM。其余材料可以这样生成：
 
 ```bash
 openssl rand -base64 32 # API_BEARER_TOKEN

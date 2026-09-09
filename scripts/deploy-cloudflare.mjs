@@ -25,8 +25,8 @@ function run(args) {
   });
 }
 
-if (!existsSync(configPath) || !existsSync(secretsPath)) {
-  throw new Error("Generated deployment files are missing. Run `pnpm cf:render` first.");
+if (!existsSync(configPath)) {
+  throw new Error("Generated deployment config is missing. Run `pnpm cf:render` first.");
 }
 
 try {
@@ -41,15 +41,15 @@ try {
     "-c",
     configFile,
   ]);
-  await run([
+  const deployArgs = [
     "exec",
     "wrangler",
     "deploy",
     "-c",
     configFile,
-    "--secrets-file",
-    secretsFile,
-  ]);
+  ];
+  if (existsSync(secretsPath)) deployArgs.push("--secrets-file", secretsFile);
+  await run(deployArgs);
 } finally {
   rmSync(configPath, { force: true });
   rmSync(secretsPath, { force: true });

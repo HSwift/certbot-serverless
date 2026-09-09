@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,19 +55,6 @@ const deploymentVariables = Object.fromEntries(
 deploymentVariables.DOWNLOAD_URL_BASE = httpsUrl("DOWNLOAD_URL_BASE");
 deploymentVariables.ACCESS_TEAM_DOMAIN = httpsUrl("ACCESS_TEAM_DOMAIN");
 
-const runtimeSecrets = Object.fromEntries(
-  Object.entries(runtimeSecretNames).map(([buildName, runtimeName]) => [
-    runtimeName,
-    required(buildName, "secret"),
-  ]),
-);
-runtimeSecrets.DOWNLOAD_SIGNING_KEY = requireBase64Key("RUNTIME_DOWNLOAD_SIGNING_KEY");
-runtimeSecrets.CERTIFICATE_MASTER_KEY = requireBase64Key("RUNTIME_CERTIFICATE_MASTER_KEY");
-
-if (!runtimeSecrets.ACME_ACCOUNT_KEY.includes("-----BEGIN PRIVATE KEY-----")) {
-  throw new Error("RUNTIME_ACME_ACCOUNT_KEY must contain a PKCS#8 PEM private key");
-}
-
 let config;
 try {
   config = JSON.parse(readFileSync(templatePath, "utf8"));
@@ -87,6 +74,27 @@ config.vars = {
 };
 
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-writeFileSync(secretsPath, `${JSON.stringify(runtimeSecrets)}\n`, { mode: 0o600 });
+rmSync(secretsPath, { force: true });
 
-console.log("Rendered temporary Cloudflare deployment files without printing their values.");
+const providedRuntimeSecretNames = Object.keys(runtimeSecretNames)
+  .filter((name) => process.env[name]?.trim());
+
+if (providedRuntimeSecretNames.length > 0) {
+  const runtimeSecrets = Object.fromEntries(
+    Object.entries(runtimeSecretNames).map(([buildName, runtimeName]) => [
+      runtimeName,
+      required(buildName, "secret"),
+    ]),
+  );
+  runtimeSecrets.DOWNLOAD_SIGNING_KEY = requireBase64Key("RUNTIME_DOWNLOAD_SIGNING_KEY");
+  runtimeSecrets.CERTIFICATE_MASTER_KEY = requireBase64Key("RUNTIME_CERTIFICATE_MASTER_KEY");
+
+  if (!runtimeSecrets.ACME_ACCOUNT_KEY.includes("-----BEGIN PRIVATE KEY-----")) {
+    throw new Error("RUNTIME_ACME_ACCOUNT_KEY must contain a PKCS#8 PEM private key");
+  }
+
+  writeFileSync(secretsPath, `${JSON.stringify(runtimeSecrets)}\n`, { mode: 0o600 });
+  console.log("Rendered temporary Cloudflare config and bootstrap secrets without printing their values.");
+} else {
+  console.log("Rendered temporary Cloudflare config; existing Worker secrets will be preserved.");
+}
