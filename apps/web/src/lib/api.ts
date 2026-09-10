@@ -1,4 +1,4 @@
-import type { Certificate, CreateCertificatePayload, Overview } from "./types";
+import type { Certificate, CreateCertificatePayload, Deployment, Overview } from "./types";
 
 interface ApiErrorPayload {
   error?: { code?: string; message?: string };
@@ -36,4 +36,10 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ expiresIn: 300 }),
   }),
+  deployments: (id: string) => request<{ deployments: Deployment[] }>(`/api/certificates/${id}/deployments`),
+  createDeployment: (id: string, name: string) => request<{ deployment: Deployment; url: string }>(`/api/certificates/${id}/deployments`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  }),
+  revokeDeployment: (id: string) => request<{ ok: true }>(`/api/deployments/${id}`, { method: "DELETE" }),
 };

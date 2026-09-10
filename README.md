@@ -19,6 +19,7 @@ flowchart LR
 
   Client[Automation client] -->|Authorization: Bearer| Worker
   Download[Presigned download] -->|HMAC + expiry + nonce| Worker
+  Origin[systemd file sync] -->|Scoped Deployment URL| Worker
 
   Worker --> D1[(D1 metadata)]
   Worker --> R2[(R2 encrypted bundles)]
@@ -28,11 +29,12 @@ flowchart LR
   Workflow --> CFAPI[Cloudflare DNS / Origin CA API]
 ```
 
-The three access paths do not conflict:
+The four access paths do not conflict:
 
 1. Cloudflare Zero Trust Access protects the console domain. The Console Worker forwards the Access JWT unchanged through a Service Binding, and the API Worker verifies its signature, issuer, and audience again.
 2. Automation clients call the API directly with `Authorization: Bearer <API_BEARER_TOKEN>`.
 3. The download endpoint accepts a presigned URL that is valid for no more than one hour, defaults to five minutes, and can be consumed only once.
+4. A revocable Deployment URL lets a generated systemd service periodically download the latest version of one certificate.
 
 Do not place the entire API domain behind a catch-all Access application. Doing so would block Bearer-only and presigned-download requests before they reach the Worker. Access should protect the Console Worker, while the API Worker continues to enforce authentication on every non-download API endpoint.
 
@@ -234,9 +236,13 @@ Except for the health check and presigned downloads, every `/api/*` endpoint acc
 | `PATCH` | `/api/certificates/:id` | Enable or disable automatic renewal |
 | `POST` | `/api/certificates/:id/renew` | Renew immediately |
 | `POST` | `/api/certificates/:id/download-link` | Create a one-time download link |
+| `GET` | `/api/certificates/:id/deployments` | List active Deployment URLs |
+| `POST` | `/api/certificates/:id/deployments` | Create a scoped Deployment URL |
+| `DELETE` | `/api/deployments/:id` | Revoke a Deployment URL |
 | `DELETE` | `/api/certificates/:id` | Delete stored data and revoke an Origin CA certificate |
 | `GET` | `/api/jobs/:id` | Get a job |
 | `GET` | `/api/audit` | Get the latest 100 audit records |
+| `GET` | `/deploy/:token` | Download the latest bundle with a scoped Deployment Token |
 
 Example:
 
@@ -246,6 +252,17 @@ curl https://cert-api.example.com/api/certificates \
 ```
 
 The downloaded ZIP contains `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `request.csr`, and `metadata.json`.
+
+## Origin file synchronization
+
+Choose **Generate sync units** from an active certificate's action menu. Enter a systemd unit identifier, destination directory, and synchronization interval. The Console creates a certificate-scoped Deployment URL and renders two files:
+
+- `certbot-sync-<name>.service` downloads and installs the latest certificate files.
+- `certbot-sync-<name>.timer` runs that oneshot service on the selected interval.
+
+The service requires `curl`, `unzip`, and GNU `install`. It only updates files; it does not contain Nginx, application reload, or restart behavior. The consuming service remains responsible for noticing or loading changed certificate files.
+
+The Deployment URL is a long-lived read credential embedded in the generated service file. Install that file with mode `0600`. D1 stores only a SHA-256 hash of its 256-bit token. The raw URL is returned only during creation, always resolves to the certificate's current version, and can be revoked from the same dialog.
 
 ## Renewal behavior
 
@@ -261,7 +278,7 @@ The downloaded ZIP contains `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.p
 pnpm check
 ```
 
-This runs TypeScript checks, unit tests, the production Console Static Assets build, and `wrangler deploy --dry-run` for both Workers. Real issuance and deployment require resources and secrets from your Cloudflare account, so repository tests never call production APIs.
+This runs TypeScript checks, unit tests, the production Console Static Assets build, and `wrangler deploy --dry-run` for both Workers. It also validates Deployment Token input, token generation, and rendered systemd units. Real issuance and deployment require resources and secrets from your Cloudflare account, so repository tests never call production APIs.
 
 ## References
 

@@ -51,3 +51,13 @@ export interface CreateCertificatePayload {
   originValidityDays?: number;
   acmeEmail?: string;
 }
+
+export interface Deployment {
+  id: string;
+  certificateId: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  lastVersionId: string | null;
+  revokedAt: string | null;
+}

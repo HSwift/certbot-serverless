@@ -118,6 +118,11 @@ export async function secureEqual(left: string, right: string): Promise<boolean>
   return difference === 0;
 }
 
+export async function hashToken(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", ownedBuffer(encoder.encode(value)));
+  return bytesToBase64Url(new Uint8Array(digest));
+}
+
 export async function certificateFingerprint(pem: string): Promise<string> {
   const body = pem
     .replace(/-----BEGIN CERTIFICATE-----/g, "")
@@ -130,5 +135,5 @@ export async function certificateFingerprint(pem: string): Promise<string> {
 }
 
 export function randomToken(): string {
-  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(24)));
+  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 }

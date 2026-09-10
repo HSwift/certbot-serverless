@@ -36,8 +36,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
+import { renderSystemdUnits, suggestedUnitName, type RenderedSystemdUnits, type SyncInterval } from "@/lib/systemd";
 import { cn } from "@/lib/utils";
-import type { Authority, Certificate, CreateCertificatePayload, Job, Overview } from "@/lib/types";
+import type { Authority, Certificate, CreateCertificatePayload, Deployment, Job, Overview } from "@/lib/types";
 
 const emptyOverview: Overview = {
   summary: { total: 0, active: 0, failed: 0, autoRenew: 0, expiring: 0 },
@@ -81,6 +82,17 @@ function StatusBadge({ status }: { status: Certificate["status"] }) {
       {statusLabel[status]}
     </Badge>
   );
+}
+
+function downloadTextFile(fileName: string, content: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 interface CreateDialogProps {
@@ -240,15 +252,248 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
   );
 }
 
+interface DeploymentDialogProps {
+  certificate: Certificate | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  notify: (message: string, kind?: "success" | "error") => void;
+}
+
+function DeploymentDialog({ certificate, open, onOpenChange, notify }: DeploymentDialogProps) {
+  const [unitName, setUnitName] = useState("");
+  const [destination, setDestination] = useState("");
+  const [interval, setInterval] = useState<SyncInterval>("6h");
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [rendered, setRendered] = useState<RenderedSystemdUnits | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !certificate) return;
+    let active = true;
+    const suggested = suggestedUnitName(certificate.name);
+    setUnitName(suggested);
+    setDestination(`/etc/certbot-serverless/${suggested}`);
+    setInterval("6h");
+    setDeployments([]);
+    setRendered(null);
+    setLoading(true);
+    void api.deployments(certificate.id)
+      .then((result) => {
+        if (active) setDeployments(result.deployments);
+      })
+      .catch((error) => {
+        if (active) notify(error instanceof Error ? error.message : "Unable to load deployment URLs", "error");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [certificate, notify, open]);
+
+  async function generate(event: FormEvent) {
+    event.preventDefault();
+    if (!certificate) return;
+    setSubmitting(true);
+    try {
+      renderSystemdUnits({
+        certificateName: certificate.name,
+        deploymentUrl: "https://placeholder.invalid/deploy/token",
+        destinationDirectory: destination,
+        interval,
+        unitName: unitName.trim(),
+      });
+      const created = await api.createDeployment(certificate.id, unitName.trim());
+      const units = renderSystemdUnits({
+        certificateName: certificate.name,
+        deploymentUrl: created.url,
+        destinationDirectory: destination,
+        interval,
+        unitName: unitName.trim(),
+      });
+      setRendered(units);
+      setDeployments((current) => [created.deployment, ...current]);
+      notify("Deployment URL and systemd units created");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to create systemd units", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function revoke(deployment: Deployment) {
+    if (!window.confirm(`Revoke deployment URL “${deployment.name}”?`)) return;
+    setRevokingId(deployment.id);
+    try {
+      await api.revokeDeployment(deployment.id);
+      setDeployments((current) => current.filter((item) => item.id !== deployment.id));
+      notify("Deployment URL revoked");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to revoke deployment URL", "error");
+    } finally {
+      setRevokingId(null);
+    }
+  }
+
+  const installCommands = rendered
+    ? [
+        `sudo install -m 0600 ${rendered.serviceFileName} /etc/systemd/system/${rendered.serviceFileName}`,
+        `sudo install -m 0644 ${rendered.timerFileName} /etc/systemd/system/${rendered.timerFileName}`,
+        "sudo systemctl daemon-reload",
+        `sudo systemctl enable --now ${rendered.timerFileName}`,
+        `sudo systemctl start ${rendered.serviceFileName}`,
+      ].join("\n")
+    : "";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <p className="font-mono text-[12px] uppercase tracking-[0.02em] text-slate">Certificate / File sync</p>
+          <DialogTitle>Generate systemd units</DialogTitle>
+          <DialogDescription>
+            Create a revocable URL that always downloads the latest version of {certificate?.name ?? "this certificate"}. The generated units only synchronize files and do not reload an application.
+          </DialogDescription>
+        </DialogHeader>
+
+        {!rendered ? (
+          <form className="grid gap-5" onSubmit={generate}>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="deployment-unit-name">Unit identifier</Label>
+                <Input
+                  id="deployment-unit-name"
+                  value={unitName}
+                  onChange={(event) => setUnitName(event.target.value.toLowerCase())}
+                  placeholder="production-origin"
+                  pattern="[a-z0-9][a-z0-9_.-]{0,63}"
+                  required
+                />
+                <p className="text-xs text-slate">Used in the generated service and timer filenames.</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>Synchronization interval</Label>
+                <Select value={interval} onValueChange={(value) => setInterval(value as SyncInterval)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="15m">Every 15 minutes</SelectItem>
+                    <SelectItem value="1h">Every hour</SelectItem>
+                    <SelectItem value="6h">Every 6 hours</SelectItem>
+                    <SelectItem value="12h">Every 12 hours</SelectItem>
+                    <SelectItem value="1d">Every day</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="deployment-destination">Destination directory</Label>
+              <Input
+                id="deployment-destination"
+                className="font-mono text-[14px]"
+                value={destination}
+                onChange={(event) => setDestination(event.target.value)}
+                placeholder="/etc/certbot-serverless/production-origin"
+                required
+              />
+              <p className="text-xs text-slate">The service writes all PEM files, the CSR, and metadata into this directory.</p>
+            </div>
+
+            <div className="rounded-[4px] bg-vellum px-4 py-3 text-xs leading-5 text-slate ring-1 ring-inset ring-gridline">
+              The Deployment URL is embedded in the service file and grants read-only access to this certificate's latest private-key bundle. Store the service file with mode <span className="font-mono text-ink">0600</span>.
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button type="submit" disabled={submitting || certificate?.status !== "active"}>
+                {submitting ? <LoaderCircle className="animate-spin" /> : <ServerCog />}
+                Generate units
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div className="grid gap-5">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-[4px] bg-vellum p-4 ring-1 ring-gridline">
+                <p className="break-all font-mono text-xs text-ink">{rendered.serviceFileName}</p>
+                <p className="mt-2 text-xs leading-5 text-slate">Contains the scoped Deployment URL. Install with mode 0600.</p>
+                <Button className="mt-4 w-full" size="sm" onClick={() => downloadTextFile(rendered.serviceFileName, rendered.service)}>
+                  <Download /> Download service
+                </Button>
+              </div>
+              <div className="rounded-[4px] bg-vellum p-4 ring-1 ring-gridline">
+                <p className="break-all font-mono text-xs text-ink">{rendered.timerFileName}</p>
+                <p className="mt-2 text-xs leading-5 text-slate">Starts the synchronization service every {interval}.</p>
+                <Button className="mt-4 w-full" variant="outline" size="sm" onClick={() => downloadTextFile(rendered.timerFileName, rendered.timer)}>
+                  <Download /> Download timer
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Install and enable</Label>
+              <pre className="max-h-44 overflow-auto rounded-[4px] bg-ink p-4 font-mono text-[12px] leading-5 text-white">{installCommands}</pre>
+            </div>
+
+            <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row">
+              <Button variant="outline" onClick={() => setRendered(null)}>Create another</Button>
+              <Button onClick={() => onOpenChange(false)}>Done</Button>
+            </div>
+          </div>
+        )}
+
+        <div className="border-t border-gridline pt-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-ink">Active deployment URLs</p>
+              <p className="mt-1 text-xs text-slate">Revoke a URL to stop future synchronization.</p>
+            </div>
+            <Badge>{deployments.length}</Badge>
+          </div>
+          <div className="mt-3 divide-y divide-gridline border-y border-gridline">
+            {loading ? (
+              <div className="flex items-center gap-2 py-4 text-xs text-slate"><LoaderCircle className="size-4 animate-spin text-ember-orange" /> Loading deployments</div>
+            ) : deployments.length === 0 ? (
+              <p className="py-4 text-xs text-slate">No active deployment URLs.</p>
+            ) : deployments.map((deployment) => (
+              <div key={deployment.id} className="flex items-center justify-between gap-3 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-ink">{deployment.name}</p>
+                  <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.02em] text-ash">
+                    {deployment.lastUsedAt ? `Last sync ${formatDate(deployment.lastUsedAt, true)}` : "Never synchronized"}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={revokingId === deployment.id}
+                  onClick={() => void revoke(deployment)}
+                >
+                  {revokingId === deployment.id ? <LoaderCircle className="animate-spin" /> : <X />}
+                  Revoke
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 interface CertificateActionsProps {
   certificate: Certificate;
   busy: boolean;
   onRenew: () => void;
   onDownload: () => void;
+  onDeploy: () => void;
   onAutoRenew: (enabled: boolean) => void;
 }
 
-function CertificateActions({ certificate, busy, onRenew, onDownload, onAutoRenew }: CertificateActionsProps) {
+function CertificateActions({ certificate, busy, onRenew, onDownload, onDeploy, onAutoRenew }: CertificateActionsProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -259,6 +504,9 @@ function CertificateActions({ certificate, busy, onRenew, onDownload, onAutoRene
       <DropdownMenuContent>
         <DropdownMenuItem onSelect={onDownload} disabled={certificate.status !== "active"}>
           <Download /> Download PEM bundle
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onDeploy} disabled={certificate.status !== "active"}>
+          <ServerCog /> Generate sync units
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onRenew} disabled={certificate.status === "issuing" || certificate.status === "pending"}>
           <RefreshCw /> Renew now
@@ -301,6 +549,7 @@ export function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [deploymentCertificate, setDeploymentCertificate] = useState<Certificate | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; kind: "success" | "error" } | null>(null);
   const [fatalError, setFatalError] = useState<string | null>(null);
@@ -393,7 +642,7 @@ export function App() {
       </header>
 
       {notice && (
-          <div className="fixed left-4 right-4 top-20 z-50 flex max-w-sm items-start gap-3 rounded-[4px] bg-ink px-4 py-3 text-sm text-white shadow-xl sm:left-auto sm:right-5">
+          <div className="fixed left-4 right-4 top-20 z-[70] flex max-w-sm items-start gap-3 rounded-[4px] bg-ink px-4 py-3 text-sm text-white shadow-xl sm:left-auto sm:right-5">
             {notice.kind === "success" ? <Check className="mt-0.5 size-4 text-ember-orange" /> : <CircleAlert className="mt-0.5 size-4" />}
             <span className="leading-5">{notice.message}</span>
             <button className="rounded-[3px] p-0.5 hover:bg-white/10" onClick={() => setNotice(null)} aria-label="Close notification"><X className="size-3.5 text-ash" /></button>
@@ -521,6 +770,7 @@ export function App() {
                       busy={busyId === certificate.id}
                       onRenew={() => void act(certificate.id, () => api.renew(certificate.id), "Renewal job started")}
                       onDownload={() => void download(certificate)}
+                      onDeploy={() => setDeploymentCertificate(certificate)}
                       onAutoRenew={(enabled) => void act(certificate.id, () => api.setAutoRenew(certificate.id, enabled), enabled ? "Automatic renewal enabled" : "Automatic renewal disabled")}
                     />
                   </div>
@@ -553,6 +803,14 @@ export function App() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={() => load(true)}
+        notify={notify}
+      />
+      <DeploymentDialog
+        certificate={deploymentCertificate}
+        open={deploymentCertificate !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDeploymentCertificate(null);
+        }}
         notify={notify}
       />
     </div>

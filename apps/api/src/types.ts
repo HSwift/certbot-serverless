@@ -49,6 +49,17 @@ export interface CertificateVersionRow {
   created_at: string;
 }
 
+export interface DeploymentTokenRow {
+  id: string;
+  certificate_id: string;
+  name: string;
+  token_hash: string;
+  created_at: string;
+  last_used_at: string | null;
+  last_version_id: string | null;
+  revoked_at: string | null;
+}
+
 export interface CertificateBundle {
   certificatePem: string;
   chainPem: string;

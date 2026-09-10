@@ -12,6 +12,10 @@ export interface CreateCertificateInput {
   acmeEmail: string | null;
 }
 
+export interface CreateDeploymentInput {
+  name: string;
+}
+
 const DOMAIN_PATTERN = /^(?:\*\.)?(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 const ORIGIN_VALIDITIES = new Set([7, 30, 90, 365, 730, 1095, 5475]);
 
@@ -98,4 +102,13 @@ export function parseDownloadTtl(value: unknown): number {
     throw new AppError(400, "INVALID_EXPIRY", "Download links must expire in 30 to 3600 seconds");
   }
   return seconds;
+}
+
+export function parseCreateDeployment(value: unknown): CreateDeploymentInput {
+  const body = objectValue(value);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name || name.length > 80 || /[\r\n]/.test(name)) {
+    throw new AppError(400, "INVALID_DEPLOYMENT_NAME", "Deployment name is required and must be at most 80 characters");
+  }
+  return { name };
 }

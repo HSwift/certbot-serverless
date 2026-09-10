@@ -19,6 +19,7 @@ flowchart LR
 
   Client[自动化客户端] -->|Authorization: Bearer| Worker
   Download[预签名下载] -->|HMAC + expiry + nonce| Worker
+  Origin[systemd 文件同步] -->|限定证书的 Deployment URL| Worker
 
   Worker --> D1[(D1 metadata)]
   Worker --> R2[(R2 encrypted bundles)]
@@ -28,11 +29,12 @@ flowchart LR
   Workflow --> CFAPI[Cloudflare DNS / Origin CA API]
 ```
 
-三种入口互不冲突：
+四种入口互不冲突：
 
 1. 管理台域名由 Zero Trust Access 保护，Access JWT 由 Console Worker 通过 Service Binding 原样转交给 API Worker，API Worker 再次校验签名、issuer 和 audience。
 2. 自动化请求直接使用 `Authorization: Bearer <API_BEARER_TOKEN>`。
 3. 下载端点使用最多 1 小时、默认 5 分钟且只能消费一次的预签名 URL。
+4. 可撤销的 Deployment URL 允许生成的 systemd 服务定期下载指定证书的最新版本。
 
 不要给整个 API 域名再套一个通配的 Access Application，否则只有 Bearer 或预签名参数的请求会在到达 Worker 前被 Access 拦截。Access 应保护 Console Worker 的管理台域名；API 的每个非下载端点仍由 API Worker 强制认证。
 
@@ -238,9 +240,13 @@ Access 公钥会轮换，Worker 使用 Access 的远程 JWKS 地址动态验证�
 | `PATCH` | `/api/certificates/:id` | 开关自动续期 |
 | `POST` | `/api/certificates/:id/renew` | 手动续期 |
 | `POST` | `/api/certificates/:id/download-link` | 创建一次性下载链接 |
+| `GET` | `/api/certificates/:id/deployments` | 列出有效的 Deployment URL |
+| `POST` | `/api/certificates/:id/deployments` | 创建限定证书的 Deployment URL |
+| `DELETE` | `/api/deployments/:id` | 撤销 Deployment URL |
 | `DELETE` | `/api/certificates/:id` | 删除存储；Origin CA 同时撤销证书 |
 | `GET` | `/api/jobs/:id` | 查询任务 |
 | `GET` | `/api/audit` | 最近 100 条审计记录 |
+| `GET` | `/deploy/:token` | 使用限定证书的 Deployment Token 下载最新证书包 |
 
 示例：
 
@@ -250,6 +256,17 @@ curl https://cert-api.example.com/api/certificates \
 ```
 
 下载 ZIP 包含 `cert.pem`、`chain.pem`、`fullchain.pem`、`privkey.pem`、`request.csr` 和 `metadata.json`。
+
+## 源站文件同步
+
+从有效证书的操作菜单中选择 **Generate sync units**，填写 systemd unit 标识符、目标目录和同步周期。Console 会创建一个限定到该证书的 Deployment URL，并渲染两个文件：
+
+- `certbot-sync-<name>.service`：下载并安装最新证书文件。
+- `certbot-sync-<name>.timer`：按选定周期运行该 oneshot 服务。
+
+service 依赖 `curl`、`unzip` 和 GNU `install`，只负责更新文件，不包含 Nginx、应用 reload 或 restart 行为。使用证书的服务需要自行决定如何感知或加载更新后的文件。
+
+Deployment URL 是嵌入 service 文件的长期只读凭据，因此该文件应以 `0600` 权限安装。D1 只保存 256-bit Token 的 SHA-256 哈希；原始 URL 仅在创建时返回，总是解析到证书的当前版本，并且可以在同一弹出框中撤销。
 
 ## 续期行为
 
@@ -265,7 +282,7 @@ curl https://cert-api.example.com/api/certificates \
 pnpm check
 ```
 
-这会执行 TypeScript 检查、单元测试、Console Static Assets 生产构建以及两个 Worker 的 `wrangler deploy --dry-run`。真实签发与部署需要你的 Cloudflare 账户资源和 secrets，因此不会在仓库测试中调用生产 API。
+这会执行 TypeScript 检查、单元测试、Console Static Assets 生产构建以及两个 Worker 的 `wrangler deploy --dry-run`，并验证 Deployment Token 输入、Token 生成和 systemd unit 渲染。真实签发与部署需要你的 Cloudflare 账户资源和 secrets，因此不会在仓库测试中调用生产 API。
 
 ## 参考
 

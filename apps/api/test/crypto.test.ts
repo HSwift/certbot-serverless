@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decryptBundle, encryptBundle, secureEqual, signDownloadPayload } from "../src/crypto";
+import { decryptBundle, encryptBundle, hashToken, randomToken, secureEqual, signDownloadPayload } from "../src/crypto";
 import type { CertificateBundle } from "../src/types";
 
 const key = Buffer.alloc(32, 7).toString("base64");
@@ -30,5 +30,12 @@ describe("request signatures", () => {
     const right = await signDownloadPayload("payload", key);
     expect(await secureEqual(left, right)).toBe(true);
     expect(await secureEqual(left, `${right}x`)).toBe(false);
+  });
+
+  it("creates opaque 256-bit deployment tokens and stable hashes", async () => {
+    const token = randomToken();
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await hashToken(token)).toBe(await hashToken(token));
+    expect(await hashToken(token)).not.toBe(await hashToken(randomToken()));
   });
 });

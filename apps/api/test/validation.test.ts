@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCreateCertificate, parseDownloadTtl } from "../src/validation";
+import { parseCreateCertificate, parseCreateDeployment, parseDownloadTtl } from "../src/validation";
 
 describe("certificate input validation", () => {
   it("normalizes and de-duplicates DNS names", () => {
@@ -36,4 +36,15 @@ describe("certificate input validation", () => {
 describe("download expiry validation", () => {
   it("uses five minutes by default", () => expect(parseDownloadTtl(null)).toBe(300));
   it("limits signed links to one hour", () => expect(() => parseDownloadTtl({ expiresIn: 3601 })).toThrow());
+});
+
+describe("deployment input validation", () => {
+  it("trims a deployment name", () => {
+    expect(parseCreateDeployment({ name: "  production origin  " })).toEqual({ name: "production origin" });
+  });
+
+  it("rejects empty and multiline names", () => {
+    expect(() => parseCreateDeployment({ name: "" })).toThrow(/name/i);
+    expect(() => parseCreateDeployment({ name: "first\nsecond" })).toThrow(/name/i);
+  });
 });

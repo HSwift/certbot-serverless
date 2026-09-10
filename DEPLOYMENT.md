@@ -17,6 +17,7 @@ flowchart LR
 
   Client[Automation client] -->|Authorization: Bearer| API
   Download[One-time download URL] -->|signature + expiry + nonce| API
+  Origin[systemd file sync] -->|Scoped Deployment URL| API
 
   API --> D1[(D1)]
   API --> R2[(R2)]
@@ -250,6 +251,7 @@ Do not enable Worker-level Access for the API Worker or create a browser-login A
 
 - `/api/*`: Access JWT or `Authorization: Bearer`.
 - `/download/*`: HMAC signature, expiry, and single-use nonce.
+- `/deploy/*`: a revocable, certificate-scoped Deployment Token embedded in a generated systemd service.
 - `/api/health`: public health check with no sensitive information.
 
 If the account has **Protect all Workers** enabled, make this Worker public or bypass account-level Access on its **Access** page. Public here only means that requests can reach the Worker; application authentication still protects its business endpoints.
@@ -399,6 +401,28 @@ Create a test certificate from the Console and confirm:
 - The download URL cannot be reused after its first successful request.
 - The downloaded ZIP contains `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `request.csr`, and `metadata.json`.
 
+### 6. systemd file synchronization
+
+From the active certificate's action menu, choose **Generate sync units** and enter:
+
+- A lowercase unit identifier.
+- An absolute destination directory.
+- A synchronization interval.
+
+Download the generated `.service` and `.timer` files, then run the installation commands shown in the Console. The target host needs `systemd`, `curl`, `unzip`, and GNU `install`.
+
+The service contains the long-lived Deployment URL, so install it with mode `0600`. It downloads the current certificate version on every run and updates `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `request.csr`, and `metadata.json` in the selected directory. It deliberately does not reload or restart any application.
+
+Run the service once manually and confirm the files appear:
+
+```bash
+sudo systemctl start certbot-sync-<name>.service
+sudo systemctl status certbot-sync-<name>.service
+sudo systemctl list-timers 'certbot-sync-*'
+```
+
+Return to the Console to confirm that **Last sync** is populated. Revoking the Deployment URL must cause later service runs to fail with an HTTP error without replacing the existing local files.
+
 ## Routine deployments
 
 After initialization, only push `main`:
@@ -470,6 +494,8 @@ Verify that the runtime token has **SSL and Certificates → Edit** for the targ
 - [ ] The Console Allow policy contains only your exact email address or explicit account member.
 - [ ] Browser-login Access does not protect the API Worker.
 - [ ] Every `/api/*` request without credentials returns `401`.
+- [ ] Every generated Deployment URL is limited to one certificate and can be revoked.
+- [ ] Generated `.service` files containing Deployment URLs are installed with mode `0600`.
 - [ ] All bootstrap `RUNTIME_*` values have been removed from the Build configuration.
 - [ ] The five Runtime Secrets exist only in Worker secret storage and a password manager.
 - [ ] `CLOUDFLARE_API_TOKEN` is restricted to the required zones and minimum permissions.

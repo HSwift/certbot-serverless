@@ -2,11 +2,11 @@ import { Hono } from "hono";
 import { zipSync, strToU8 } from "fflate";
 import { requireAuth, type AppContext } from "./auth";
 import { revokeOriginCertificate } from "./cloudflare-api";
-import { decryptBundle, secureEqual, signDownloadPayload } from "./crypto";
-import { audit, createJob, getCertificate, getVersion, nowIso, publicCertificate } from "./db";
+import { decryptBundle, hashToken, randomToken, secureEqual, signDownloadPayload } from "./crypto";
+import { audit, createJob, getCertificate, getVersion, nowIso, publicCertificate, publicDeployment } from "./db";
 import { AppError, errorMessage } from "./errors";
-import type { CertificateRow, CertificateVersionRow, EncryptedEnvelope, Env } from "./types";
-import { parseCreateCertificate, parseDownloadTtl } from "./validation";
+import type { CertificateRow, CertificateVersionRow, DeploymentTokenRow, EncryptedEnvelope, Env } from "./types";
+import { parseCreateCertificate, parseCreateDeployment, parseDownloadTtl } from "./validation";
 export { CertificateWorkflow } from "./workflow";
 
 const app = new Hono<AppContext>();
@@ -180,6 +180,68 @@ app.post("/api/certificates/:id/download-link", async (context) => {
   return context.json({ url: `${base}/download/${certificate.id}?${query}`, expiresAt: new Date(expires * 1_000).toISOString() });
 });
 
+app.get("/api/certificates/:id/deployments", async (context) => {
+  const certificate = await getCertificate(context.env.DB, context.req.param("id"));
+  if (!certificate) throw new AppError(404, "NOT_FOUND", "Certificate not found");
+  const result = await context.env.DB.prepare(
+    `SELECT * FROM deployment_tokens
+     WHERE certificate_id = ? AND revoked_at IS NULL
+     ORDER BY created_at DESC LIMIT 100`,
+  ).bind(certificate.id).all<DeploymentTokenRow>();
+  return context.json({ deployments: result.results.map(publicDeployment) });
+});
+
+app.post("/api/certificates/:id/deployments", async (context) => {
+  const certificate = await getCertificate(context.env.DB, context.req.param("id"));
+  if (!certificate) throw new AppError(404, "NOT_FOUND", "Certificate not found");
+  if (!certificate.current_version_id) {
+    throw new AppError(409, "NOT_READY", "Certificate has no deployable version");
+  }
+  const input = parseCreateDeployment(await context.req.json().catch(() => null));
+  const id = crypto.randomUUID();
+  const token = randomToken();
+  const createdAt = nowIso();
+  const deployment: DeploymentTokenRow = {
+    id,
+    certificate_id: certificate.id,
+    name: input.name,
+    token_hash: await hashToken(token),
+    created_at: createdAt,
+    last_used_at: null,
+    last_version_id: null,
+    revoked_at: null,
+  };
+  await context.env.DB.prepare(
+    `INSERT INTO deployment_tokens
+      (id, certificate_id, name, token_hash, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).bind(id, certificate.id, input.name, deployment.token_hash, createdAt).run();
+  await audit(context.env.DB, context.get("actor"), "certificate.deployment.created", certificate.id, {
+    deploymentId: id,
+    name: input.name,
+  });
+  const base = context.env.DOWNLOAD_URL_BASE.replace(/\/$/, "");
+  return context.json({
+    deployment: publicDeployment(deployment),
+    url: `${base}/deploy/${token}`,
+  }, 201);
+});
+
+app.delete("/api/deployments/:id", async (context) => {
+  const deployment = await context.env.DB.prepare(
+    "SELECT * FROM deployment_tokens WHERE id = ? AND revoked_at IS NULL",
+  ).bind(context.req.param("id")).first<DeploymentTokenRow>();
+  if (!deployment) throw new AppError(404, "NOT_FOUND", "Deployment not found");
+  await context.env.DB.prepare(
+    "UPDATE deployment_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+  ).bind(nowIso(), deployment.id).run();
+  await audit(context.env.DB, context.get("actor"), "certificate.deployment.revoked", deployment.certificate_id, {
+    deploymentId: deployment.id,
+    name: deployment.name,
+  });
+  return context.json({ ok: true });
+});
+
 app.delete("/api/certificates/:id", async (context) => {
   const certificate = await getCertificate(context.env.DB, context.req.param("id"));
   if (!certificate) throw new AppError(404, "NOT_FOUND", "Certificate not found");
@@ -224,6 +286,39 @@ app.get("/api/audit", async (context) => {
   return context.json({ events: result.results });
 });
 
+app.get("/deploy/:token", async (context) => {
+  const token = context.req.param("token");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
+    throw new AppError(404, "NOT_FOUND", "Deployment URL not found");
+  }
+  const deployment = await context.env.DB.prepare(
+    "SELECT * FROM deployment_tokens WHERE token_hash = ? AND revoked_at IS NULL",
+  ).bind(await hashToken(token)).first<DeploymentTokenRow>();
+  if (!deployment) throw new AppError(404, "NOT_FOUND", "Deployment URL not found");
+
+  const certificate = await getCertificate(context.env.DB, deployment.certificate_id);
+  if (!certificate?.current_version_id) {
+    throw new AppError(409, "NOT_READY", "Certificate has no deployable version");
+  }
+  const version = await getVersion(context.env.DB, certificate.current_version_id);
+  if (!version || version.certificate_id !== certificate.id) {
+    throw new AppError(404, "NOT_FOUND", "Certificate version not found");
+  }
+  const archive = await createCertificateArchive(context.env, certificate, version);
+  const usedAt = nowIso();
+  const used = await context.env.DB.prepare(
+    "UPDATE deployment_tokens SET last_used_at = ?, last_version_id = ? WHERE id = ? AND revoked_at IS NULL",
+  ).bind(usedAt, version.id, deployment.id).run();
+  if (used.meta.changes !== 1) {
+    throw new AppError(404, "NOT_FOUND", "Deployment URL not found");
+  }
+  await audit(context.env.DB, `deployment:${deployment.id}`, "certificate.deployment.downloaded", certificate.id, {
+    deploymentId: deployment.id,
+    versionId: version.id,
+  });
+  return certificateArchiveResponse(archive, certificate.primary_domain);
+});
+
 app.get("/download/:id", async (context) => {
   const certificateId = context.req.param("id");
   const versionId = context.req.query("version") ?? "";
@@ -257,12 +352,21 @@ app.get("/download/:id", async (context) => {
   if (!certificate || !version || version.certificate_id !== certificate.id) {
     throw new AppError(404, "NOT_FOUND", "Certificate version not found");
   }
-  const object = await context.env.CERTIFICATES.get(version.r2_key);
+  const archive = await createCertificateArchive(context.env, certificate, version);
+  return certificateArchiveResponse(archive, certificate.primary_domain);
+});
+
+async function createCertificateArchive(
+  env: Env,
+  certificate: CertificateRow,
+  version: CertificateVersionRow,
+): Promise<Uint8Array> {
+  const object = await env.CERTIFICATES.get(version.r2_key);
   if (!object) throw new AppError(404, "NOT_FOUND", "Encrypted certificate bundle not found");
   const envelope = await object.json<EncryptedEnvelope>();
   const bundle = await decryptBundle(
     envelope,
-    context.env.CERTIFICATE_MASTER_KEY,
+    env.CERTIFICATE_MASTER_KEY,
     `${certificate.id}:${version.id}`,
   );
   const metadata = JSON.stringify({
@@ -274,7 +378,7 @@ app.get("/download/:id", async (context) => {
     notBefore: version.not_before,
     expiresAt: version.expires_at,
   }, null, 2);
-  const archive = zipSync({
+  return zipSync({
     "cert.pem": strToU8(bundle.certificatePem),
     "chain.pem": strToU8(bundle.chainPem),
     "fullchain.pem": strToU8(bundle.fullchainPem),
@@ -282,8 +386,13 @@ app.get("/download/:id", async (context) => {
     "request.csr": strToU8(bundle.csrPem),
     "metadata.json": strToU8(metadata),
   }, { level: 6 });
-  const filename = certificate.primary_domain.replace(/^\*\./, "wildcard.").replace(/[^a-z0-9.-]/gi, "_");
-  return new Response(archive, {
+}
+
+function certificateArchiveResponse(archive: Uint8Array, primaryDomain: string): Response {
+  const filename = primaryDomain.replace(/^\*\./, "wildcard.").replace(/[^a-z0-9.-]/gi, "_");
+  const body = new Uint8Array(archive.byteLength);
+  body.set(archive);
+  return new Response(body.buffer, {
     headers: {
       "Content-Type": "application/zip",
       "Content-Disposition": `attachment; filename="${filename}.zip"`,
@@ -291,7 +400,7 @@ app.get("/download/:id", async (context) => {
       "X-Content-Type-Options": "nosniff",
     },
   });
-});
+}
 
 app.notFound((context) => context.json({ error: { code: "NOT_FOUND", message: "Route not found" } }, 404));
 

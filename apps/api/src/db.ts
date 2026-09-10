@@ -1,4 +1,4 @@
-import type { AuthActor, CertificateRow, CertificateVersionRow, Env, JobKind } from "./types";
+import type { AuthActor, CertificateRow, CertificateVersionRow, DeploymentTokenRow, Env, JobKind } from "./types";
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -73,5 +73,17 @@ export function publicCertificate(row: CertificateRow): Record<string, unknown> 
     lastError: row.last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export function publicDeployment(row: DeploymentTokenRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    certificateId: row.certificate_id,
+    name: row.name,
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+    lastVersionId: row.last_version_id,
+    revokedAt: row.revoked_at,
   };
 }
