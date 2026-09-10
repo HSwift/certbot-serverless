@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && pnpm build:functions",
-    "build:functions": "wrangler pages functions build functions --outdir .wrangler/functions",
-    "deploy": "pnpm build && wrangler pages deploy dist",
-    "typecheck": "tsc -b --pretty false",
+    "build": "wrangler types --check --include-runtime=false --env-file typegen.env && tsc -b && vite build",
+    "deploy": "pnpm build && wrangler deploy",
+    "typecheck": "wrangler types --check --include-runtime=false --env-file typegen.env && tsc -b --pretty false",
+    "cf:typegen": "wrangler types --include-runtime=false --env-file typegen.env",
+    "cf:dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "test": "vitest run"
   },
   "dependencies": {
