@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { zipSync, strToU8 } from "fflate";
 import { requireAuth, type AppContext } from "./auth";
-import { revokeOriginCertificate } from "./cloudflare-api";
+import { listZones, revokeOriginCertificate } from "./cloudflare-api";
+import { resolveCertificateInput } from "./certificate-request";
 import { decryptBundle, hashToken, randomToken, secureEqual, signDownloadPayload } from "./crypto";
 import { audit, createJob, getCertificate, getVersion, nowIso, publicCertificate, publicDeployment } from "./db";
 import { AppError, errorMessage } from "./errors";
 import type { CertificateRow, CertificateVersionRow, DeploymentTokenRow, EncryptedEnvelope, Env } from "./types";
-import { parseCreateCertificate, parseCreateDeployment, parseDownloadTtl } from "./validation";
+import { parseCreateDeployment, parseDownloadTtl } from "./validation";
 export { CertificateWorkflow } from "./workflow";
 
 const app = new Hono<AppContext>();
@@ -20,6 +21,11 @@ app.get("/api/health", (context) => context.json({
 app.use("/api/*", requireAuth);
 
 app.get("/api/me", (context) => context.json({ actor: context.get("actor") }));
+
+app.get("/api/cloudflare/zones", async (context) => {
+  const zones = await listZones(context.env.CLOUDFLARE_API_TOKEN);
+  return context.json({ zones });
+});
 
 app.get("/api/overview", async (context) => {
   const [counts, expiring, jobs] = await Promise.all([
@@ -66,7 +72,9 @@ app.get("/api/certificates", async (context) => {
 });
 
 app.post("/api/certificates", async (context) => {
-  const input = parseCreateCertificate(await context.req.json().catch(() => null));
+  const input = await resolveCertificateInput(
+    await context.req.json().catch(() => null), context.env.CLOUDFLARE_API_TOKEN,
+  );
   const id = crypto.randomUUID();
   const now = nowIso();
   await context.env.DB.prepare(

@@ -234,6 +234,7 @@ Access 公钥会轮换，Worker 使用 Access 的远程 JWKS 地址动态验证�
 | --- | --- | --- |
 | `GET` | `/api/health` | 无敏感信息的健康检查 |
 | `GET` | `/api/overview` | 控制台统计和近期任务 |
+| `GET` | `/api/cloudflare/zones` | 当前 Cloudflare API Token 可访问的有效站点 |
 | `GET` | `/api/certificates` | 证书列表 |
 | `POST` | `/api/certificates` | 创建证书并启动 Workflow |
 | `GET` | `/api/certificates/:id` | 证书、版本与任务详情 |
@@ -256,6 +257,10 @@ curl https://cert-api.example.com/api/certificates \
 ```
 
 下载 ZIP 包含 `cert.pem`、`chain.pem`、`fullchain.pem`、`privkey.pem`、`request.csr` 和 `metadata.json`。
+
+申请 Cloudflare Origin CA 时，在控制台选择 Cloudflare 站点即可，无需手填主机名或 ACME 邮箱。与 [Cloudflare 控制台](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/) 一致，默认覆盖 Zone 根域名及其一级通配符（例如 `example.com` 和 `*.example.com`）。可选的自定义主机名会替换默认范围，且必须属于所选站点。两种签发机构的站点都只能从当前 API Token 可访问的有效 Zone 中选择；后端也会在创建任务前校验域名归属。
+
+API 客户端可向 `POST /api/certificates` 提交 `{"name":"Production origin","authority":"cloudflare-origin","zoneId":"<32位Zone ID>"}`，省略 `domains` 或传空数组即可使用默认覆盖范围。保留只传显式域名、不传 `zoneId` 的调用方式，但每个域名都必须属于当前 Token 可访问的 Zone。Origin CA 支持最多 200 个主机名，以及 7、30、90、365、730、1095、5475 天有效期；默认续期窗口会根据有效期调整。将证书和私钥安装到源站后，启用 Cloudflare 代理并使用 Full (strict) SSL/TLS 模式。
 
 ## 源站文件同步
 

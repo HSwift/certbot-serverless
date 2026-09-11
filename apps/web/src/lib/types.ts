@@ -44,12 +44,18 @@ export interface Overview {
 export interface CreateCertificatePayload {
   name: string;
   authority: Authority;
-  domains: string[];
+  domains?: string[];
+  zoneId?: string;
   keyType: "ec-p256" | "rsa-2048";
   autoRenew: boolean;
-  renewBeforeDays: number;
+  renewBeforeDays?: number;
   originValidityDays?: number;
   acmeEmail?: string;
+}
+
+export interface CloudflareZone {
+  id: string;
+  name: string;
 }
 
 export interface Deployment {

@@ -1,4 +1,4 @@
-import type { Certificate, CreateCertificatePayload, Deployment, Overview } from "./types";
+import type { Certificate, CloudflareZone, CreateCertificatePayload, Deployment, Overview } from "./types";
 
 interface ApiErrorPayload {
   error?: { code?: string; message?: string };
@@ -21,6 +21,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  cloudflareZones: () => request<{ zones: CloudflareZone[] }>("/api/cloudflare/zones"),
   overview: () => request<Overview>("/api/overview"),
   certificates: () => request<{ certificates: Certificate[] }>("/api/certificates"),
   createCertificate: (payload: CreateCertificatePayload) => request<{ certificateId: string }>("/api/certificates", {

@@ -230,6 +230,7 @@ Except for the health check and presigned downloads, every `/api/*` endpoint acc
 | --- | --- | --- |
 | `GET` | `/api/health` | Non-sensitive health check |
 | `GET` | `/api/overview` | Console statistics and recent jobs |
+| `GET` | `/api/cloudflare/zones` | Active sites accessible to the configured Cloudflare API token |
 | `GET` | `/api/certificates` | List certificates |
 | `POST` | `/api/certificates` | Create a certificate and start its Workflow |
 | `GET` | `/api/certificates/:id` | Certificate, version, and job details |
@@ -252,6 +253,10 @@ curl https://cert-api.example.com/api/certificates \
 ```
 
 The downloaded ZIP contains `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `request.csr`, and `metadata.json`.
+
+For Cloudflare Origin CA, select a Cloudflare site in the console and create the certificate without typing hostnames or an ACME email. As in the [Cloudflare dashboard](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/), the default coverage is the zone apex and its first-level wildcard (for example, `example.com` and `*.example.com`). Optional custom hostnames replace that coverage and must belong to the selected site. Both authorities require a site selected from the configured API token's accessible active zones; the API also validates zone ownership before creating a job.
+
+API clients can send `{"name":"Production origin","authority":"cloudflare-origin","zoneId":"<32-character-zone-id>"}` to `POST /api/certificates`, omitting `domains` or passing an empty array for default coverage. Explicit domains without `zoneId` remain supported, but each must belong to a zone accessible to the configured token. Origin CA supports up to 200 hostnames and validity periods of 7, 30, 90, 365, 730, 1095, or 5475 days; the renewal window defaults to a value shorter than the chosen lifetime. Install the certificate and private key on the origin, enable Cloudflare proxying, and use Full (strict) SSL/TLS mode.
 
 ## Origin file synchronization
 

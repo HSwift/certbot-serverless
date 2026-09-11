@@ -38,7 +38,7 @@ import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { renderSystemdUnits, suggestedUnitName, type RenderedSystemdUnits, type SyncInterval } from "@/lib/systemd";
 import { cn } from "@/lib/utils";
-import type { Authority, Certificate, CreateCertificatePayload, Deployment, Job, Overview } from "@/lib/types";
+import type { Authority, Certificate, CloudflareZone, CreateCertificatePayload, Deployment, Job, Overview } from "@/lib/types";
 
 const emptyOverview: Overview = {
   summary: { total: 0, active: 0, failed: 0, autoRenew: 0, expiring: 0 },
@@ -106,17 +106,56 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
   const [authority, setAuthority] = useState<Authority>("letsencrypt");
   const [name, setName] = useState("");
   const [domains, setDomains] = useState("");
+  const [originDomains, setOriginDomains] = useState("");
+  const [zones, setZones] = useState<CloudflareZone[]>([]);
+  const [zoneId, setZoneId] = useState("");
+  const [loadingZones, setLoadingZones] = useState(false);
+  const [zoneError, setZoneError] = useState("");
+  const [zoneReload, setZoneReload] = useState(0);
   const [email, setEmail] = useState("");
   const [keyType, setKeyType] = useState<CreateCertificatePayload["keyType"]>("ec-p256");
   const [autoRenew, setAutoRenew] = useState(true);
   const [validity, setValidity] = useState("5475");
   const [submitting, setSubmitting] = useState(false);
+  const isOrigin = authority === "cloudflare-origin";
+  const selectedZone = zones.find((zone) => zone.id === zoneId);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setLoadingZones(true);
+    setZoneError("");
+    void api.cloudflareZones()
+      .then(({ zones: availableZones }) => {
+        if (!active) return;
+        setZones(availableZones);
+        setZoneId((current) => availableZones.some((zone) => zone.id === current)
+          ? current
+          : availableZones.length === 1 ? availableZones[0].id : "");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setZones([]);
+        setZoneId("");
+        setZoneError(error instanceof Error ? error.message : "Unable to load Cloudflare sites");
+      })
+      .finally(() => { if (active) setLoadingZones(false); });
+    return () => { active = false; };
+  }, [open, zoneReload]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const domainList = domains.split(/[\n,\s]+/).map((domain) => domain.trim()).filter(Boolean);
-    if (!name.trim() || domainList.length === 0 || (authority === "letsencrypt" && !email.trim())) {
-      notify("Certificate name, domains, and contact email are required", "error");
+    const domainList = (isOrigin ? originDomains : domains).split(/[\n,\s]+/).map((domain) => domain.trim()).filter(Boolean);
+    if (!name.trim()) {
+      notify("Certificate name is required", "error");
+      return;
+    }
+    if (!selectedZone) {
+      notify("Select a Cloudflare site", "error");
+      return;
+    }
+    if (!isOrigin && (domainList.length === 0 || !email.trim())) {
+      notify("Domains and contact email are required for Let's Encrypt", "error");
       return;
     }
     setSubmitting(true);
@@ -124,16 +163,17 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
       await api.createCertificate({
         name: name.trim(),
         authority,
-        domains: domainList,
+        zoneId: selectedZone.id,
+        ...(!isOrigin || domainList.length > 0 ? { domains: domainList } : {}),
         keyType,
         autoRenew,
-        renewBeforeDays: authority === "letsencrypt" ? 30 : 60,
         ...(authority === "letsencrypt" ? { acmeEmail: email.trim() } : { originValidityDays: Number(validity) }),
       });
       notify("Issuance job created");
       onOpenChange(false);
       setName("");
       setDomains("");
+      setOriginDomains("");
       await onCreated();
     } catch (error) {
       notify(error instanceof Error ? error.message : "Unable to create certificate", "error");
@@ -148,7 +188,9 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
         <DialogHeader>
           <p className="font-mono text-[12px] uppercase tracking-[0.02em] text-slate">Certificate / New</p>
           <DialogTitle>Create certificate</DialogTitle>
-          <DialogDescription>The private key is generated in the Worker and encrypted with AES-256-GCM before it is stored in R2.</DialogDescription>
+          <DialogDescription>{isOrigin
+            ? "Create an Origin CA certificate for TLS between Cloudflare and your origin server. Select a site to use its default hostname coverage."
+            : "Create a publicly trusted certificate. Domain ownership is verified automatically through DNS-01."}</DialogDescription>
         </DialogHeader>
 
         <form className="grid gap-5" onSubmit={submit}>
@@ -198,17 +240,58 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="domains">Domains / SANs</Label>
-            <textarea
-              id="domains"
-              value={domains}
-              onChange={(event) => setDomains(event.target.value)}
-              rows={4}
-              placeholder={"example.com\n*.example.com"}
-              className="w-full resize-y rounded-[4px] bg-white px-3 py-2.5 font-mono text-[14px] leading-6 text-ink ring-1 ring-inset ring-gridline placeholder:text-stone focus:outline-none focus:ring-2 focus:ring-ember-orange/20"
-            />
-            <p className="text-xs text-slate">Enter one domain per line. Wildcard certificates are verified automatically through Cloudflare DNS-01.</p>
+            <Label htmlFor="cloudflare-site">Cloudflare site</Label>
+            <Select value={zoneId} onValueChange={(value) => { if (value) setZoneId(value); }} disabled={loadingZones || zones.length === 0}>
+              <SelectTrigger id="cloudflare-site"><SelectValue placeholder={loadingZones ? "Loading sites…" : "Select a site"} /></SelectTrigger>
+              <SelectContent>
+                {zones.map((zone) => <SelectItem key={zone.id} value={zone.id}>{zone.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {zoneError ? (
+              <div className="flex items-center gap-2 text-xs text-slate" role="alert">
+                <span>{zoneError}</span>
+                <Button type="button" variant="outline" size="sm" onClick={() => setZoneReload((value) => value + 1)}>Retry</Button>
+              </div>
+            ) : !loadingZones && zones.length === 0 ? (
+              <p className="text-xs text-slate">No active Cloudflare sites are available for this account.</p>
+            ) : null}
+            {isOrigin && selectedZone && (
+              <p className="text-xs leading-5 text-slate">Default coverage: <span className="font-mono">{selectedZone.name}</span> and <span className="font-mono">*.{selectedZone.name}</span>. No hostname entry is needed.</p>
+            )}
           </div>
+
+          {isOrigin ? (
+            <div className="grid gap-3">
+              <details className="grid gap-2">
+                <summary className="cursor-pointer text-sm text-ink">Custom hostnames (optional)</summary>
+                <div className="mt-2 grid gap-2">
+                  <Label htmlFor="origin-domains">Hostnames / SANs</Label>
+                  <textarea
+                    id="origin-domains"
+                    value={originDomains}
+                    onChange={(event) => setOriginDomains(event.target.value)}
+                    rows={3}
+                    placeholder={selectedZone ? `${selectedZone.name}\n*.${selectedZone.name}` : "example.com\n*.example.com"}
+                    className="w-full resize-y rounded-[4px] bg-white px-3 py-2.5 font-mono text-[14px] leading-6 text-ink ring-1 ring-inset ring-gridline placeholder:text-stone focus:outline-none focus:ring-2 focus:ring-ember-orange/20"
+                  />
+                  <p className="text-xs leading-5 text-slate">Leave blank to use the selected site's default coverage. Custom hostnames replace the defaults and must belong to the selected site; enter up to 200 names, one per line. No DNS-01 challenge or contact email is needed.</p>
+                </div>
+              </details>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <Label htmlFor="domains">Domains / SANs</Label>
+              <textarea
+                id="domains"
+                value={domains}
+                onChange={(event) => setDomains(event.target.value)}
+                rows={4}
+                placeholder={selectedZone ? `${selectedZone.name}\n*.${selectedZone.name}` : "example.com\n*.example.com"}
+                className="w-full resize-y rounded-[4px] bg-white px-3 py-2.5 font-mono text-[14px] leading-6 text-ink ring-1 ring-inset ring-gridline placeholder:text-stone focus:outline-none focus:ring-2 focus:ring-ember-orange/20"
+              />
+              <p className="text-xs text-slate">Enter one domain per line within the selected Cloudflare site. Wildcard certificates are verified automatically through Cloudflare DNS-01.</p>
+            </div>
+          )}
 
           {authority === "letsencrypt" ? (
             <div className="grid gap-2">
@@ -221,13 +304,16 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
               <Select value={validity} onValueChange={setValidity}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="7">7 days</SelectItem>
+                  <SelectItem value="30">30 days</SelectItem>
+                  <SelectItem value="90">90 days</SelectItem>
                   <SelectItem value="365">1 year</SelectItem>
                   <SelectItem value="730">2 years</SelectItem>
                   <SelectItem value="1095">3 years</SelectItem>
                   <SelectItem value="5475">15 years (recommended)</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs leading-5 text-slate">Trusted only by Cloudflare Origin CA. The origin should accept proxied Cloudflare traffic only.</p>
+              <p className="text-xs leading-5 text-slate">Install the certificate and private key on your origin, enable Cloudflare proxying, and use Full (strict) SSL/TLS mode. Origin CA certificates are not trusted directly by browsers.</p>
             </div>
           )}
 
@@ -241,7 +327,7 @@ function CreateCertificateDialog({ open, onOpenChange, onCreated, notify }: Crea
 
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={submitting}>
+            <Button type="submit" disabled={submitting || loadingZones || !selectedZone}>
               {submitting ? <LoaderCircle className="animate-spin" /> : <Zap />}
               Create issuance job
             </Button>

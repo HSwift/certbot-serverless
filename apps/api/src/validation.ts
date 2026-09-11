@@ -4,6 +4,7 @@ import type { CertificateAuthority, CertificateKeyType } from "./types";
 export interface CreateCertificateInput {
   name: string;
   authority: CertificateAuthority;
+  zoneId: string | null;
   domains: string[];
   keyType: CertificateKeyType;
   autoRenew: boolean;
@@ -42,12 +43,19 @@ export function parseCreateCertificate(value: unknown): CreateCertificateInput {
     throw new AppError(400, "INVALID_AUTHORITY", "Authority must be letsencrypt or cloudflare-origin");
   }
 
-  if (!Array.isArray(body.domains)) {
+  const zoneId = body.zoneId ?? null;
+  if (zoneId !== null && (typeof zoneId !== "string" || !/^[a-f0-9]{32}$/i.test(zoneId))) {
+    throw new AppError(400, "INVALID_ZONE", "Select a valid Cloudflare site");
+  }
+  const useZoneDefaults = authority === "cloudflare-origin" && zoneId !== null;
+  const domainValues = body.domains === undefined && useZoneDefaults ? [] : body.domains;
+  if (!Array.isArray(domainValues)) {
     throw new AppError(400, "INVALID_DOMAINS", "Domains must be an array");
   }
-  const domains = [...new Set(body.domains.map((item) => typeof item === "string" ? normalizeDomain(item) : ""))];
-  if (domains.length === 0 || domains.length > 20 || domains.some((domain) => !DOMAIN_PATTERN.test(domain))) {
-    throw new AppError(400, "INVALID_DOMAINS", "Provide between 1 and 20 valid DNS names");
+  const domains = [...new Set(domainValues.map((item) => typeof item === "string" ? normalizeDomain(item) : ""))];
+  const maxDomains = authority === "cloudflare-origin" ? 200 : 20;
+  if ((domains.length === 0 && !useZoneDefaults) || domains.length > maxDomains || domains.some((domain) => !DOMAIN_PATTERN.test(domain))) {
+    throw new AppError(400, "INVALID_DOMAINS", `Provide between 1 and ${maxDomains} valid DNS names${authority === "cloudflare-origin" ? " or select a Cloudflare site for default coverage" : ""}`);
   }
 
   const keyType = body.keyType ?? "ec-p256";
@@ -84,6 +92,7 @@ export function parseCreateCertificate(value: unknown): CreateCertificateInput {
   return {
     name,
     authority,
+    zoneId,
     domains,
     keyType,
     autoRenew,

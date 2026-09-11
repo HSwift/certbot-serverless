@@ -11,7 +11,7 @@ interface CloudflareResponse<T> {
   errors?: CloudflareError[];
 }
 
-interface ZoneResult {
+export interface ZoneResult {
   id: string;
   name: string;
 }
@@ -53,6 +53,27 @@ async function cloudflareRequest<T>(
     throw new AppError(response.status === 401 || response.status === 403 ? 502 : response.status, "CLOUDFLARE_API_ERROR", message);
   }
   return payload.result;
+}
+
+export async function listZones(apiToken: string): Promise<ZoneResult[]> {
+  const zones: ZoneResult[] = [];
+  const perPage = 50;
+  for (let page = 1; ; page += 1) {
+    const query = new URLSearchParams({
+      status: "active", order: "name", direction: "asc", per_page: String(perPage), page: String(page),
+    });
+    const results = await cloudflareRequest<ZoneResult[]>(apiToken, `/zones?${query}`);
+    zones.push(...results.map(({ id, name }) => ({ id, name })));
+    if (results.length < perPage) return zones;
+  }
+}
+
+export async function getZone(apiToken: string, zoneId: string): Promise<ZoneResult> {
+  const zone = await cloudflareRequest<ZoneResult & { status: string }>(apiToken, `/zones/${encodeURIComponent(zoneId)}`);
+  if (zone.status !== "active") {
+    throw new AppError(422, "ZONE_NOT_ACTIVE", "Select an active Cloudflare site");
+  }
+  return { id: zone.id, name: zone.name };
 }
 
 export async function findZone(apiToken: string, hostname: string): Promise<ZoneResult> {
