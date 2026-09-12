@@ -33,7 +33,7 @@ export function DialogHeader({ className, ...props }: ComponentProps<"div">) {
 }
 
 export function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) {
-  return <DialogPrimitive.Title className={cn("text-[26px] font-medium tracking-[-0.01em] text-ink", className)} {...props} />;
+  return <DialogPrimitive.Title className={cn("text-2xl font-medium tracking-[-0.01em] text-ink", className)} {...props} />;
 }
 
 export function DialogDescription({ className, ...props }: ComponentProps<typeof DialogPrimitive.Description>) {

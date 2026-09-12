@@ -706,7 +706,7 @@ export function App() {
   return (
     <div className="min-h-screen bg-white text-ink">
       <header className="sticky top-0 z-40 border-b border-gridline bg-white/95 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-[1680px] items-center justify-between px-3 sm:px-6 lg:px-8">
+        <div className="page-shell flex h-16 items-center justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex size-8 shrink-0 items-center justify-center rounded-[4px] bg-ember-orange text-white">
               <LockKeyhole className="size-4" />
@@ -735,14 +735,14 @@ export function App() {
           </div>
       )}
 
-        <main className="mx-auto max-w-[1680px] p-4 sm:p-6 lg:p-8">
+        <main className="page-shell py-4 sm:py-6 lg:py-8">
           <section id="overview">
             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
               <div>
                 <div className="mb-3 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.02em] text-slate">
                   <span className="h-4 w-0.5 bg-ember-orange" /> Overview / Live
                 </div>
-                <h1 className="text-2xl font-medium tracking-[-0.01em] text-ink">Certificate overview</h1>
+                <h1 className="text-[22px] font-medium leading-tight tracking-[-0.01em] text-ink">Certificate overview</h1>
                 <p className="mt-2 text-sm text-slate">Manage issuance, renewal, and encrypted certificate bundles.</p>
                 <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] uppercase tracking-[0.02em] text-ash">
                   <span className="flex items-center gap-2"><span className={cn("size-1.5 rounded-full", fatalError ? "bg-ink" : "bg-ember-orange")} />{fatalError ? "API offline" : "Worker online"}</span>
@@ -773,7 +773,7 @@ export function App() {
                     <p className="text-sm font-medium text-ink">{item.label}</p>
                     <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.02em] text-ash">{item.note}</p>
                   </div>
-                  <p className="mt-6 text-3xl font-medium tracking-[-0.02em] text-ink">{loading ? "—" : item.value}</p>
+                  <p className="mt-6 text-[28px] font-medium leading-tight tracking-[-0.02em] text-ink">{loading ? "—" : item.value}</p>
                 </div>
               ))}
             </div>
