@@ -58,6 +58,11 @@ export interface CloudflareZone {
   name: string;
 }
 
+export interface DownloadLink {
+  url: string;
+  expiresAt: string;
+}
+
 export interface Deployment {
   id: string;
   certificateId: string;

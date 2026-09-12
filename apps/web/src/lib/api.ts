@@ -1,4 +1,4 @@
-import type { Certificate, CloudflareZone, CreateCertificatePayload, Deployment, Overview } from "./types";
+import type { Certificate, CloudflareZone, CreateCertificatePayload, Deployment, DownloadLink, Overview } from "./types";
 
 interface ApiErrorPayload {
   error?: { code?: string; message?: string };
@@ -33,7 +33,7 @@ export const api = {
     method: "PATCH",
     body: JSON.stringify({ autoRenew }),
   }),
-  downloadLink: (id: string) => request<{ url: string; expiresAt: string }>(`/api/certificates/${id}/download-link`, {
+  downloadLink: (id: string) => request<DownloadLink>(`/api/certificates/${id}/download-link`, {
     method: "POST",
     body: JSON.stringify({ expiresIn: 300 }),
   }),

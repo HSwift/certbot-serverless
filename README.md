@@ -252,7 +252,7 @@ curl https://cert-api.example.com/api/certificates \
   -H "Authorization: Bearer $CERTBOT_TOKEN"
 ```
 
-The downloaded ZIP contains `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `request.csr`, and `metadata.json`.
+Choose **Download PEM bundle** to open a dialog with a download button, a copyable download address, and its expiry time. The address is valid for five minutes and one download; you can generate a new link in the same dialog. The downloaded ZIP contains `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `request.csr`, and `metadata.json`.
 
 For Cloudflare Origin CA, select a Cloudflare site in the console and create the certificate without typing hostnames or an ACME email. As in the [Cloudflare dashboard](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/), the default coverage is the zone apex and its first-level wildcard (for example, `example.com` and `*.example.com`). Optional custom hostnames replace that coverage and must belong to the selected site. Both authorities require a site selected from the configured API token's accessible active zones; the API also validates zone ownership before creating a job.
 

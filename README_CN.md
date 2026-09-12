@@ -256,7 +256,7 @@ curl https://cert-api.example.com/api/certificates \
   -H "Authorization: Bearer $CERTBOT_TOKEN"
 ```
 
-下载 ZIP 包含 `cert.pem`、`chain.pem`、`fullchain.pem`、`privkey.pem`、`request.csr` 和 `metadata.json`。
+点击 **Download PEM bundle** 打开弹窗，可直接下载、复制下载地址并查看到期时间。地址有效期为五分钟，仅可下载一次；可在同一弹窗中重新生成链接。下载 ZIP 包含 `cert.pem`、`chain.pem`、`fullchain.pem`、`privkey.pem`、`request.csr` 和 `metadata.json`。
 
 申请 Cloudflare Origin CA 时，在控制台选择 Cloudflare 站点即可，无需手填主机名或 ACME 邮箱。与 [Cloudflare 控制台](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/) 一致，默认覆盖 Zone 根域名及其一级通配符（例如 `example.com` 和 `*.example.com`）。可选的自定义主机名会替换默认范围，且必须属于所选站点。两种签发机构的站点都只能从当前 API Token 可访问的有效 Zone 中选择；后端也会在创建任务前校验域名归属。
 

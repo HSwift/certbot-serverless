@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   CalendarClock,
   Check,
@@ -17,6 +17,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { DownloadCertificateDialog, type DownloadDialogState } from "@/components/download-certificate-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -636,6 +637,8 @@ export function App() {
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [deploymentCertificate, setDeploymentCertificate] = useState<Certificate | null>(null);
+  const [downloadState, setDownloadState] = useState<DownloadDialogState | null>(null);
+  const downloadRequest = useRef(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ message: string; kind: "success" | "error" } | null>(null);
   const [fatalError, setFatalError] = useState<string | null>(null);
@@ -689,11 +692,27 @@ export function App() {
     }
   }
 
-  async function download(certificate: Certificate) {
-    await act(certificate.id, async () => {
+  async function prepareDownload(certificate: Certificate) {
+    const requestId = ++downloadRequest.current;
+    setDownloadState({ certificate, link: null, loading: true, error: null });
+    try {
       const link = await api.downloadLink(certificate.id);
-      window.location.assign(link.url);
-    }, "A one-time download link was created and is valid for 5 minutes");
+      if (downloadRequest.current === requestId) {
+        setDownloadState({ certificate, link, loading: false, error: null });
+      }
+    } catch (error) {
+      if (downloadRequest.current === requestId) {
+        setDownloadState({
+          certificate, link: null, loading: false,
+          error: error instanceof Error ? error.message : "Unable to create a download address",
+        });
+      }
+    }
+  }
+
+  function closeDownload() {
+    downloadRequest.current += 1;
+    setDownloadState(null);
   }
 
   const stats = [
@@ -855,7 +874,7 @@ export function App() {
                       certificate={certificate}
                       busy={busyId === certificate.id}
                       onRenew={() => void act(certificate.id, () => api.renew(certificate.id), "Renewal job started")}
-                      onDownload={() => void download(certificate)}
+                      onDownload={() => void prepareDownload(certificate)}
                       onDeploy={() => setDeploymentCertificate(certificate)}
                       onAutoRenew={(enabled) => void act(certificate.id, () => api.setAutoRenew(certificate.id, enabled), enabled ? "Automatic renewal enabled" : "Automatic renewal disabled")}
                     />
@@ -899,6 +918,13 @@ export function App() {
         }}
         notify={notify}
       />
+      {downloadState && (
+        <DownloadCertificateDialog
+          state={downloadState}
+          onClose={closeDownload}
+          onRegenerate={() => void prepareDownload(downloadState.certificate)}
+        />
+      )}
     </div>
   );
 }
