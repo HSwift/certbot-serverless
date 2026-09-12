@@ -4,10 +4,11 @@ import { requireAuth, type AppContext } from "./auth";
 import { listZones, revokeOriginCertificate } from "./cloudflare-api";
 import { resolveCertificateInput } from "./certificate-request";
 import { decryptBundle, hashToken, randomToken, secureEqual, signDownloadPayload } from "./crypto";
-import { audit, createJob, getCertificate, getVersion, nowIso, publicCertificate, publicDeployment } from "./db";
+import { audit, createJob, getActiveDeployment, getCertificate, getVersion, nowIso, publicCertificate, publicDeployment } from "./db";
 import { AppError, errorMessage } from "./errors";
 import type { CertificateRow, CertificateVersionRow, DeploymentTokenRow, EncryptedEnvelope, Env } from "./types";
 import { parseCreateDeployment, parseDownloadTtl } from "./validation";
+import { renderSystemdInstaller, suggestedUnitName, type SyncInterval } from "../../../shared/systemd";
 export { CertificateWorkflow } from "./workflow";
 
 const app = new Hono<AppContext>();
@@ -294,14 +295,43 @@ app.get("/api/audit", async (context) => {
   return context.json({ events: result.results });
 });
 
+app.get("/deploy/:token/install.sh", async (context) => {
+  const token = context.req.param("token");
+  const deployment = await getActiveDeployment(context.env.DB, token);
+  if (!deployment) throw new AppError(404, "NOT_FOUND", "Deployment URL not found");
+  const certificate = await getCertificate(context.env.DB, deployment.certificate_id);
+  if (!certificate?.current_version_id) {
+    throw new AppError(409, "NOT_READY", "Certificate has no deployable version");
+  }
+  const unitName = context.req.query("unitName") ?? suggestedUnitName(deployment.name);
+  let script: string;
+  try {
+    script = renderSystemdInstaller({
+      certificateName: certificate.name,
+      deploymentUrl: `${context.env.DOWNLOAD_URL_BASE.replace(/\/$/, "")}/deploy/${token}`,
+      destinationDirectory: context.req.query("destination") ?? `/etc/certbot-serverless/${unitName}`,
+      interval: (context.req.query("interval") ?? "6h") as SyncInterval,
+      unitName,
+    });
+  } catch (error) {
+    throw new AppError(400, "INVALID_SYSTEMD_OPTIONS", errorMessage(error));
+  }
+  await audit(context.env.DB, `deployment:${deployment.id}`, "certificate.deployment.installer.downloaded", certificate.id, {
+    deploymentId: deployment.id, unitName,
+  });
+  return new Response(script, {
+    headers: {
+      "Content-Type": "text/x-shellscript; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="certbot-install.sh"',
+      "Cache-Control": "private, no-store, max-age=0",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+});
+
 app.get("/deploy/:token", async (context) => {
   const token = context.req.param("token");
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
-    throw new AppError(404, "NOT_FOUND", "Deployment URL not found");
-  }
-  const deployment = await context.env.DB.prepare(
-    "SELECT * FROM deployment_tokens WHERE token_hash = ? AND revoked_at IS NULL",
-  ).bind(await hashToken(token)).first<DeploymentTokenRow>();
+  const deployment = await getActiveDeployment(context.env.DB, token);
   if (!deployment) throw new AppError(404, "NOT_FOUND", "Deployment URL not found");
 
   const certificate = await getCertificate(context.env.DB, deployment.certificate_id);

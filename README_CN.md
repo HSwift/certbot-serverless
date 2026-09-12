@@ -248,6 +248,7 @@ Access 公钥会轮换，Worker 使用 Access 的远程 JWKS 地址动态验证�
 | `GET` | `/api/jobs/:id` | 查询任务 |
 | `GET` | `/api/audit` | 最近 100 条审计记录 |
 | `GET` | `/deploy/:token` | 使用限定证书的 Deployment Token 下载最新证书包 |
+| `GET` | `/deploy/:token/install.sh` | 使用同一限定证书的 Deployment Token 下载 systemd 安装脚本 |
 
 示例：
 
@@ -269,9 +270,13 @@ API 客户端可向 `POST /api/certificates` 提交 `{"name":"Production origin"
 - `certbot-sync-<name>.service`：下载并安装最新证书文件。
 - `certbot-sync-<name>.timer`：按选定周期运行该 oneshot 服务。
 
+在 **One-command installation** 中点击 **Copy command**，粘贴到 Linux 源站执行。命令先通过 `curl` 完整下载安装脚本，再以 root 身份执行（必要时使用 `sudo`），将 service 和 timer 分别以 `0600`、`0644` 权限安装到 systemd，重新加载配置、启用并启动定时器，随后立即同步一次证书。脚本使用弹窗中选择的名称、目标目录和同步周期，也保留单独下载文件及手动安装命令。
+
 service 依赖 `curl`、`unzip` 和 GNU `install`，只负责更新文件，不包含 Nginx、应用 reload 或 restart 行为。使用证书的服务需要自行决定如何感知或加载更新后的文件。
 
 Deployment URL 是嵌入 service 文件的长期只读凭据，因此该文件应以 `0600` 权限安装。D1 只保存 256-bit Token 的 SHA-256 哈希；原始 URL 仅在创建时返回，总是解析到证书的当前版本，并且可以在同一弹出框中撤销。
+
+撤销 Deployment URL 后，其安装脚本下载地址也会失效。
 
 ## 续期行为
 

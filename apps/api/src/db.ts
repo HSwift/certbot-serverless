@@ -1,4 +1,5 @@
 import type { AuthActor, CertificateRow, CertificateVersionRow, DeploymentTokenRow, Env, JobKind } from "./types";
+import { hashToken } from "./crypto";
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -10,6 +11,13 @@ export async function getCertificate(db: D1Database, id: string): Promise<Certif
 
 export async function getVersion(db: D1Database, id: string): Promise<CertificateVersionRow | null> {
   return db.prepare("SELECT * FROM certificate_versions WHERE id = ?").bind(id).first<CertificateVersionRow>();
+}
+
+export async function getActiveDeployment(db: Pick<D1Database, "prepare">, token: string): Promise<DeploymentTokenRow | null> {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  return db.prepare(
+    "SELECT * FROM deployment_tokens WHERE token_hash = ? AND revoked_at IS NULL",
+  ).bind(await hashToken(token)).first<DeploymentTokenRow>();
 }
 
 export async function createJob(

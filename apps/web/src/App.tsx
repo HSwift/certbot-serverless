@@ -3,6 +3,7 @@ import {
   CalendarClock,
   Check,
   CircleAlert,
+  Copy,
   Download,
   Ellipsis,
   FileKey2,
@@ -352,6 +353,7 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
   const [interval, setInterval] = useState<SyncInterval>("6h");
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [rendered, setRendered] = useState<RenderedSystemdUnits | null>(null);
+  const [installCopied, setInstallCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -365,6 +367,7 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
     setInterval("6h");
     setDeployments([]);
     setRendered(null);
+    setInstallCopied(false);
     setLoading(true);
     void api.deployments(certificate.id)
       .then((result) => {
@@ -402,6 +405,7 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
         unitName: unitName.trim(),
       });
       setRendered(units);
+      setInstallCopied(false);
       setDeployments((current) => [created.deployment, ...current]);
       notify("Deployment URL and systemd units created");
     } catch (error) {
@@ -425,6 +429,16 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
     }
   }
 
+  async function copyInstallCommand() {
+    if (!rendered) return;
+    try {
+      await navigator.clipboard.writeText(rendered.installCommand);
+      setInstallCopied(true);
+    } catch {
+      notify("Unable to copy automatically. Select the installation command and copy it manually.", "error");
+    }
+  }
+
   const installCommands = rendered
     ? [
         `sudo install -m 0600 ${rendered.serviceFileName} /etc/systemd/system/${rendered.serviceFileName}`,
@@ -437,7 +451,7 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="grid-cols-1 [&>*]:min-w-0">
         <DialogHeader>
           <p className="font-mono text-[12px] uppercase tracking-[0.02em] text-slate">Certificate / File sync</p>
           <DialogTitle>Generate systemd units</DialogTitle>
@@ -448,7 +462,7 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
 
         {!rendered ? (
           <form className="grid gap-5" onSubmit={generate}>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="deployment-unit-name">Unit identifier</Label>
                 <Input
@@ -462,9 +476,9 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
                 <p className="text-xs text-slate">Used in the generated service and timer filenames.</p>
               </div>
               <div className="grid gap-2">
-                <Label>Synchronization interval</Label>
+                <Label htmlFor="deployment-interval">Synchronization interval</Label>
                 <Select value={interval} onValueChange={(value) => setInterval(value as SyncInterval)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="deployment-interval"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="15m">Every 15 minutes</SelectItem>
                     <SelectItem value="1h">Every hour</SelectItem>
@@ -502,28 +516,46 @@ function DeploymentDialog({ certificate, open, onOpenChange, notify }: Deploymen
             </div>
           </form>
         ) : (
-          <div className="grid gap-5">
+          <div className="grid min-w-0 grid-cols-1 gap-5">
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-[4px] bg-vellum p-4 ring-1 ring-gridline">
+              <div className="flex min-w-0 flex-col rounded-[4px] bg-vellum p-4 ring-1 ring-gridline">
                 <p className="break-all font-mono text-xs text-ink">{rendered.serviceFileName}</p>
-                <p className="mt-2 text-xs leading-5 text-slate">Contains the scoped Deployment URL. Install with mode 0600.</p>
-                <Button className="mt-4 w-full" size="sm" onClick={() => downloadTextFile(rendered.serviceFileName, rendered.service)}>
+                <p className="mb-4 mt-2 text-xs leading-5 text-slate">Contains the scoped Deployment URL. Install with mode 0600.</p>
+                <Button className="mt-auto w-full" size="sm" onClick={() => downloadTextFile(rendered.serviceFileName, rendered.service)}>
                   <Download /> Download service
                 </Button>
               </div>
-              <div className="rounded-[4px] bg-vellum p-4 ring-1 ring-gridline">
+              <div className="flex min-w-0 flex-col rounded-[4px] bg-vellum p-4 ring-1 ring-gridline">
                 <p className="break-all font-mono text-xs text-ink">{rendered.timerFileName}</p>
-                <p className="mt-2 text-xs leading-5 text-slate">Starts the synchronization service every {interval}.</p>
-                <Button className="mt-4 w-full" variant="outline" size="sm" onClick={() => downloadTextFile(rendered.timerFileName, rendered.timer)}>
+                <p className="mb-4 mt-2 text-xs leading-5 text-slate">Starts the synchronization service every {interval}.</p>
+                <Button className="mt-auto w-full" variant="outline" size="sm" onClick={() => downloadTextFile(rendered.timerFileName, rendered.timer)}>
                   <Download /> Download timer
                 </Button>
               </div>
             </div>
 
-            <div className="grid gap-2">
-              <Label>Install and enable</Label>
-              <pre className="max-h-44 overflow-auto rounded-[4px] bg-ink p-4 font-mono text-[12px] leading-5 text-white">{installCommands}</pre>
+            <div className="grid min-w-0 grid-cols-1 gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="systemd-install-command">One-command installation</Label>
+                <Button type="button" variant="outline" size="sm" onClick={() => void copyInstallCommand()}>
+                  {installCopied ? <Check /> : <Copy />} {installCopied ? "Copied" : "Copy command"}
+                </Button>
+              </div>
+              <p className="text-xs leading-5 text-slate">Run on your Linux origin to download and install both units, enable the timer, and synchronize certificates immediately. Requires systemd, curl, unzip, and GNU install; uses sudo when needed.</p>
+              <textarea
+                id="systemd-install-command"
+                readOnly
+                rows={7}
+                value={rendered.installCommand}
+                onFocus={(event) => event.target.select()}
+                className="w-full resize-y rounded-[4px] bg-ink p-4 font-mono text-[12px] leading-5 text-white focus:outline-none focus:ring-2 focus:ring-ember-orange/20"
+              />
             </div>
+
+            <details className="min-w-0">
+              <summary className="cursor-pointer text-sm text-ink">Install manually after downloading the files</summary>
+              <pre className="mt-3 max-h-44 overflow-auto rounded-[4px] bg-ink p-4 font-mono text-[12px] leading-5 text-white">{installCommands}</pre>
+            </details>
 
             <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row">
               <Button variant="outline" onClick={() => setRendered(null)}>Create another</Button>

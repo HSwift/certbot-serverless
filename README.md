@@ -244,6 +244,7 @@ Except for the health check and presigned downloads, every `/api/*` endpoint acc
 | `GET` | `/api/jobs/:id` | Get a job |
 | `GET` | `/api/audit` | Get the latest 100 audit records |
 | `GET` | `/deploy/:token` | Download the latest bundle with a scoped Deployment Token |
+| `GET` | `/deploy/:token/install.sh` | Download a systemd installer with the same scoped Deployment Token |
 
 Example:
 
@@ -265,9 +266,13 @@ Choose **Generate sync units** from an active certificate's action menu. Enter a
 - `certbot-sync-<name>.service` downloads and installs the latest certificate files.
 - `certbot-sync-<name>.timer` runs that oneshot service on the selected interval.
 
+Click **Copy command** under **One-command installation** and run it on the Linux origin. The command downloads the installer with `curl` before executing it as root (using `sudo` when needed). It installs the service with mode `0600` and the timer with mode `0644`, reloads systemd, enables and starts the timer, and immediately synchronizes the certificate files. The installer uses the name, destination, and interval selected in the dialog. Individual downloads and manual installation commands remain available.
+
 The service requires `curl`, `unzip`, and GNU `install`. It only updates files; it does not contain Nginx, application reload, or restart behavior. The consuming service remains responsible for noticing or loading changed certificate files.
 
 The Deployment URL is a long-lived read credential embedded in the generated service file. Install that file with mode `0600`. D1 stores only a SHA-256 hash of its 256-bit token. The raw URL is returned only during creation, always resolves to the certificate's current version, and can be revoked from the same dialog.
+
+Revoking a Deployment URL also disables its installer download.
 
 ## Renewal behavior
 
